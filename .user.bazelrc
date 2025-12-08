@@ -1,0 +1,19 @@
+# Toolchain
+build --action_env=CC=/usr/bin/gcc-13
+build --action_env=CXX=/usr/bin/g++-13
+
+# CPU-only build
+build --define MEDIAPIPE_DISABLE_GPU=1
+
+# XNNPACK: disable unsupported ISAs
+build --define xnn_enable_avxvnniint8=false
+build --define xnn_enable_avxvnni=false
+build --define xnn_enable_avx512fp16=false
+build --define xnn_enable_avx512=false
+
+# OpenCV system include path
+build --copt=-I/usr/include/opencv4
+build --host_copt=-I/usr/include/opencv4
+
+# Optional: quiet warnings
+build --copt=-w

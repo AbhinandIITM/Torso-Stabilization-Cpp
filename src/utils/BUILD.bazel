@@ -1,0 +1,11 @@
+cc_library(
+    name = "mp_utils",
+    srcs = ["mp_utils.cc"],
+    deps = [
+        "//include/utils:mp_utils_headers",
+        "//mediapipe/tasks/cc/vision/hand_landmarker:hand_landmarker",
+        "//mediapipe/framework/formats:image",
+        "@com_google_absl//absl/log",
+    ],
+    visibility = ["//visibility:public"],
+)

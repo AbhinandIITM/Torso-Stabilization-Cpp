@@ -1,0 +1,7 @@
+cc_binary(
+    name = "mp_test",
+    srcs = ["mp_test.cpp"],  # or your actual filename
+    deps = [
+        "//src/utils:mp_utils",
+    ],
+)

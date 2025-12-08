@@ -1,0 +1,6 @@
+cc_library(
+    name = "mp_utils",
+    hdrs = ["mp_utils.hpp"],
+    include_prefix = "utils",
+    visibility = ["//visibility:public"],
+)
