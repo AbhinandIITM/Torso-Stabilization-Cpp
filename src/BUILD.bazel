@@ -1,0 +1,43 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+cc_library(
+    name = "state_command",
+    srcs = ["state_command.cpp"],
+    hdrs = ["//include:state_command"],
+    deps = [
+        "@opencv//:opencv",
+        "@eigen//:eigen3",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "idle_state",
+    srcs = ["idle_state.cpp"],
+    hdrs = ["//include:idle_state"],
+    deps = [
+        ":state_command",
+        "//src/utils:imu_server",
+        "//src/utils:imu_tracker",
+        "@opencv//:opencv",
+        "@open3d//:open3d",
+        "@eigen//:eigen3",
+        "@com_github_nlohmann_json//:json",
+        "//src/utils:mediapipe_utils",
+        "//src/utils:midas_utils",
+        "//src/utils:apriltag_utils",
+    ],
+    copts = ["-std=c++17"],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "main",
+    srcs = ["main.cpp"],
+    deps = [
+        ":idle_state",
+        ":state_command",
+        "@opencv//:opencv",
+    ],
+    copts = ["-std=c++17"],
+)

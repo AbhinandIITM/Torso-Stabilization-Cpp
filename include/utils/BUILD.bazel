@@ -35,5 +35,9 @@ cc_library(
     hdrs = ["apriltag_utils.hpp"],
     include_prefix = "utils",
     visibility = ["//visibility:public"],
-    deps = ["@eigen//:eigen3"],
+    deps = [
+        "@eigen//:eigen3",
+        "@opencv//:opencv",
+        "@apriltag//:apriltag",
+    ],
 )

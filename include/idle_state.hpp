@@ -47,5 +47,5 @@ private:
 
     // IMU Server and its dedicated thread
     std::unique_ptr<IMUServer> imu_server;
-    std::thread server_thread;
+    // std::thread server_thread;
 };
