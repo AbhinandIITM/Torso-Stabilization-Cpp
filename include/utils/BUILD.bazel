@@ -10,7 +10,7 @@ cc_library(
     hdrs = ["midas_utils.hpp"],
     include_prefix = "utils",
     deps = [
-        "@libtorch//:torch",  # propagate LibTorch headers to anyone including this
+        "@libtorch//:torch",
     ],
     visibility = ["//visibility:public"],
 )
@@ -37,7 +37,7 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "@eigen//:eigen3",
-        "@opencv//:opencv",
+        "@linux_opencv//:opencv",
         "@apriltag//:apriltag",
     ],
 )

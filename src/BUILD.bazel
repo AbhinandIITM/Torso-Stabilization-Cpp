@@ -1,5 +1,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
+exports_files(["calib.json", "calib.yaml"])
+
 cc_library(
     name = "state_command",
     srcs = ["state_command.cpp"],

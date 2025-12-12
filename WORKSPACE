@@ -683,10 +683,12 @@ http_archive(
 
 http_archive(
     name = "opencv",
-    build_file_content = all_content,
+    build_file = "@//third_party:opencv.BUILD",
     strip_prefix = "opencv-3.4.11",
     urls = ["https://github.com/opencv/opencv/archive/3.4.11.tar.gz"],
+    sha256 = "10898a0268d8f8cbaf0354ddd1d9de6abaac84e3d9a6c9754f56a0aa3383d73b",
 )
+
 
 new_local_repository(
     name = "linux_opencv",
@@ -744,4 +746,13 @@ http_archive(
     strip_prefix = "asio-asio-1-24-0",
     urls = ["https://github.com/chriskohlhoff/asio/archive/asio-1-24-0.tar.gz"],
     build_file = "@//third_party:asio.BUILD",
+)
+
+# ───────── AprilTag ─────────
+http_archive(
+    name = "apriltag",
+    build_file = "@//third_party:apriltag.BUILD",
+    sha256 = "7e021bab89f136aa3cf736f772a635aaa353f93f6f8859495f4bd8c519be4805",
+    strip_prefix = "apriltag-3.4.2",
+    urls = ["https://github.com/AprilRobotics/apriltag/archive/refs/tags/v3.4.2.tar.gz"],
 )

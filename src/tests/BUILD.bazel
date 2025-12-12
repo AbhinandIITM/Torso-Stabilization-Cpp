@@ -5,9 +5,8 @@ cc_binary(
         "//src/utils:mp_utils",
         "@bazel_tools//tools/cpp/runfiles", 
     ],
-    
-    
 )
+
 cc_binary(
     name = "midas_test",
     srcs = ["midas_test.cpp"],
@@ -17,7 +16,7 @@ cc_binary(
         "@bazel_tools//tools/cpp/runfiles", 
     ],
     data = [
-        "//src/models:dpt_swin2_tiny_256_torchscript",  # <- add this
+        "//src/models:dpt_swin2_tiny_256_torchscript",
     ],
 )
 
@@ -25,11 +24,26 @@ cc_binary(
     name = "imu_test",
     srcs = ["imu_test.cpp"],
     deps = [
-        "//src/utils:imu_server",      # Needs websocketpp + asio
-        "//src/utils:imu_tracker",     # Needs Eigen
+        "//src/utils:imu_server",
+        "//src/utils:imu_tracker",
         "@com_google_absl//absl/log",
         "@com_github_nlohmann_json//:json",
-        "@eigen//:eigen3",              # Correct: eigen3, not eigen
+        "@eigen//:eigen3",
     ],
     copts = ["-std=c++17"], 
+)
+
+cc_binary(
+    name = "apriltag_test",
+    srcs = ["apriltag_test.cpp"],
+    deps = [
+        "//src/utils:apriltag_utils",
+        "//include/utils:apriltag_utils",
+        "@linux_opencv//:opencv",
+        "@com_google_absl//absl/log",
+    ],
+    copts = ["-std=c++17"],
+    data = [
+        "//src:calib.yaml",  # Changed to YAML
+    ],
 )
