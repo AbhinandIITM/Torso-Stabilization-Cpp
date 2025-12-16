@@ -11,9 +11,9 @@ int main(int argc, char** argv) {
     std::cout << "========================================\n\n";
     
     // Configuration parameters
-    const std::string CALIB_DATA_PATH = "src/calib.yaml";
+    const std::string CALIB_DATA_PATH = "src/calib_2.yaml";
     const std::string TAG_FAMILY = "tag36h11";
-    const double TAG_SIZE = 5;  // Tag size in meters (adjust to your actual tag size)
+    const double TAG_SIZE = 5;  
     const int CAMERA_ID = 2;  // Fixed camera ID (change to 1 if needed)
     
     try {
@@ -25,8 +25,8 @@ int main(int argc, char** argv) {
         }
         
         cv::Mat cam_matrix, dist_coeffs;
-        fs["camMatrix"] >> cam_matrix;
-        fs["dist_coeffs"] >> dist_coeffs;
+        fs["camera_matrix"] >> cam_matrix;
+        fs["distortion_coefficients"] >> dist_coeffs;
         fs.release();
         
         if (cam_matrix.empty() || dist_coeffs.empty()) {
@@ -81,8 +81,8 @@ int main(int argc, char** argv) {
         std::cout << "Camera " << CAMERA_ID << " opened successfully!\n";
         
         // Set camera properties (optional)
-        cap.set(cv::CAP_PROP_FRAME_WIDTH, 1920);
-        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 1080);
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
         cap.set(cv::CAP_PROP_FPS, 30);
         
         std::cout << "\nCamera properties:\n";
@@ -171,16 +171,17 @@ int main(int argc, char** argv) {
                           cv::Scalar(0, 255, 255), 2);
                 
                 // Draw depth if available
+                // Draw depth if available
                 if (tag.depth > 0) {
                     std::ostringstream depth_stream;
-                    depth_stream << std::fixed << std::setprecision(2) << tag.depth;
-                    std::string depth_text = depth_stream.str() + "m";
-                    
+                    depth_stream << std::fixed << std::setprecision(2) << (tag.depth * 1000);  // Convert to mm
+                    std::string depth_text = depth_stream.str() + "mm";
                     cv::putText(display_frame, depth_text,
-                              cv::Point(tag.center.x + 15, tag.center.y + 15),
-                              cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                              cv::Scalar(255, 255, 0), 2);
+                                cv::Point(tag.center.x + 15, tag.center.y + 15),
+                                cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                                cv::Scalar(255, 255, 0), 2);
                 }
+
                 
                 // Print detection info every 30 frames
                 if (frame_count % 30 == 0) {

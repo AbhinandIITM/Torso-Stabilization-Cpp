@@ -44,6 +44,6 @@ cc_binary(
     ],
     copts = ["-std=c++17"],
     data = [
-        "//src:calib.yaml",  # Changed to YAML
+        "//src:calib_2.yaml",  # Changed to YAML
     ],
 )

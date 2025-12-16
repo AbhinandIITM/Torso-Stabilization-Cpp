@@ -71,8 +71,8 @@ int main() {
                             
                             // Extract gyroscope
                             Eigen::Vector3d gyro(0, 0, 0);
-                            if (imu.contains("ICM42632M Gyroscope")) {
-                                auto& gyro_vals = imu["ICM42632M Gyroscope"]["values"];
+                            if (imu.contains("gyroscope")) {
+                                auto& gyro_vals = imu["gyroscope"]["values"];
                                 gyro = Eigen::Vector3d(
                                     gyro_vals[0].get<double>(),
                                     gyro_vals[1].get<double>(),
@@ -82,8 +82,8 @@ int main() {
                             
                             // Extract accelerometer
                             Eigen::Vector3d accel(0, 0, 0);
-                            if (imu.contains("Samsung Linear Acceleration Sensor")) {
-                                auto& accel_vals = imu["Samsung Linear Acceleration Sensor"]["values"];
+                            if (imu.contains("linear_acceleration")) {
+                                auto& accel_vals = imu["linear_acceleration"]["values"];
                                 accel = Eigen::Vector3d(
                                     accel_vals[0].get<double>(),
                                     accel_vals[1].get<double>(),
@@ -97,19 +97,22 @@ int main() {
                                 static double last_timestamp = json_data["timestamp"].get<double>();
                                 double current_timestamp = json_data["timestamp"].get<double>();
                                 dt = current_timestamp - last_timestamp;
+                                std::cout << 1/dt << std::endl;
                                 last_timestamp = current_timestamp;
+                                
                             }
                             
                             // Update tracker
                             tracker.update(accel, gyro, dt);
                             
                             // Print orientation every 50 messages
-                            if (message_count % 500 == 0) {
-                                auto transform = tracker.get_transform();
-                                std::cout << "\n--- Orientation Update #" << message_count << " ---\n";
-                                std::cout << "Gyro:  [" << gyro.transpose() << "] rad/s\n";
-                                std::cout << "Accel: [" << accel.transpose() << "] m/s²\n";
-                                std::cout << "Transform:\n" << transform << "\n\n";
+                            if (message_count % 5 == 0) {
+                                // auto transform = tracker.get_transform();
+                                // std::cout << "\n--- Orientation Update #" << message_count << " ---\n";
+                                // std::cout << "Gyro:  [" << gyro.transpose() << "] rad/s\n";
+                                // std::cout << "Accel: [" << accel.transpose() << "] m/s²\n";
+                                // std::cout << "Transform:\n" << transform << "\n\n";
+                                
                             }
                         }
                         

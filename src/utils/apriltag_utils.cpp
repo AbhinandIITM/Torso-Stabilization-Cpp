@@ -30,8 +30,8 @@ ApriltagUtils::ApriltagUtils(const std::string& calib_data_path,
         throw std::runtime_error("Failed to open calibration file: " + calib_data_path);
     }
     
-    fs["camMatrix"] >> cam_matrix;
-    fs["dist_coeffs"] >> dist_coeffs;
+    fs["camera_matrix"] >> cam_matrix;
+    fs["distortion_coefficients"] >> dist_coeffs;
     fs.release();
     
     if (cam_matrix.empty() || dist_coeffs.empty()) {
@@ -155,19 +155,31 @@ std::vector<TagDetection> ApriltagUtils::get_tags(const cv::Mat& frame) {
         object_points.push_back(cv::Point3f( half_size, -half_size, 0));
         object_points.push_back(cv::Point3f( half_size,  half_size, 0));
         object_points.push_back(cv::Point3f(-half_size,  half_size, 0));
-        
-        // Solve PnP to get pose
+        std::vector<cv::Point2f> undistorted_corners;
+        cv::Mat K = cam_matrix.clone();  // Camera matrix as is
+        cv::undistortPoints(tag_det.corners, undistorted_corners,
+                            cam_matrix, dist_coeffs,
+                            cv::Mat::eye(3, 3, CV_32F),  // R matrix
+                            K);      
         cv::Mat rvec, tvec;
         bool success = cv::solvePnP(
             object_points,
-            tag_det.corners,
+            undistorted_corners,
             cam_matrix,
-            dist_coeffs,
-            rvec,
-            tvec,
-            false,
+            cv::Mat(),  // Empty - already undistorted
+            rvec, tvec, false,
             cv::SOLVEPNP_IPPE_SQUARE
         );
+        // bool success = cv::solvePnP(
+        //     object_points,
+        //     tag_det.corners,
+        //     cam_matrix,
+        //     dist_coeffs,
+        //     rvec,
+        //     tvec,
+        //     false,
+        //     cv::SOLVEPNP_IPPE_SQUARE
+        // );
         
         if (success) {
             // Convert rotation vector to rotation matrix
@@ -175,7 +187,7 @@ std::vector<TagDetection> ApriltagUtils::get_tags(const cv::Mat& frame) {
             tag_det.pose_t = tvec.clone();
             
             // Calculate depth (distance from camera)
-            tag_det.depth = cv::norm(tvec);
+            tag_det.depth = cv::norm(tvec); 
         } else {
             std::cerr << "Warning: PnP failed for tag " << det->id << "\n";
             tag_det.pose_R = cv::Mat::eye(3, 3, CV_64F);
