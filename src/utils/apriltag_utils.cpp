@@ -1,25 +1,27 @@
 #include "utils/apriltag_utils.hpp"
 #include <iostream>
-#include <cmath>
 
 // Include the C-based AprilTag library headers
 extern "C" {
-    #include <apriltag/apriltag.h>
-    #include <apriltag/tag36h11.h>
-    #include <apriltag/tag25h9.h>
-    #include <apriltag/tag16h5.h>
-    #include <apriltag/tagCircle21h7.h>
-    #include <apriltag/tagCircle49h12.h>
-    #include <apriltag/tagCustom48h12.h>
-    #include <apriltag/tagStandard41h12.h>
-    #include <apriltag/tagStandard52h13.h>
+    #include "apriltag.h"
+    #include "tag36h11.h"
+    #include "tag25h9.h"
+    #include "tag16h5.h"
+    #include "tagCircle21h7.h"
+    #include "tagCircle49h12.h"
+    #include "tagCustom48h12.h"
+    #include "tagStandard41h12.h"
+    #include "tagStandard52h13.h"
+    #include "apriltag_pose.h"
+    #include "common/homography.h"
 }
 
-ApriltagUtils::ApriltagUtils(const std::string& calib_data_path, 
-                             const std::string& family, 
+ApriltagUtils::ApriltagUtils(const std::string& calib_data_path,
+                             const std::string& family,
                              double tag_size)
-    : at_detector(nullptr), 
-      tag_family(nullptr), 
+    : at_detector(nullptr),
+      tag_family(nullptr),
+      family_name(family),
       tag_size_meters(tag_size)
 {
     std::cout << "Initializing AprilTag detector...\n";
@@ -69,27 +71,46 @@ ApriltagUtils::ApriltagUtils(const std::string& calib_data_path,
     // Add family to detector
     apriltag_detector_add_family(at_detector, tag_family);
     
-    // Configure detector parameters for better performance
-    at_detector->quad_decimate = 2.0;  // Decimate input image for faster detection
-    at_detector->quad_sigma = 0.0;     // Gaussian blur sigma (0 = no blur)
-    at_detector->nthreads = 4;         // Number of threads
-    at_detector->debug = 0;            // No debug output
-    at_detector->refine_edges = 1;     // Refine edges for better accuracy
+    // ========================================
+    // OPTIMIZED PARAMETERS FOR MULTIPLE TAGS
+    // ========================================
+    at_detector->quad_decimate = 2.0;      // Higher = faster but less accurate (1.0-4.0)
+    at_detector->quad_sigma = 0.0;         // No blur for speed
+    at_detector->nthreads = 4;             // Use all cores
+    at_detector->debug = 0;                // No debug
+    at_detector->refine_edges = 1;         // Better accuracy with minimal cost
+    at_detector->decode_sharpening = 0.25; // Moderate sharpening
     
     std::cout << "AprilTag detector initialized with family: " << family << "\n";
-    std::cout << "Tag size: " << tag_size_meters << " meters\n";
+    std::cout << "Tag size: " << tag_size_meters << " meters (" << (tag_size_meters * 100) << " cm)\n";
+    std::cout << "Performance settings: quad_decimate=" << at_detector->quad_decimate 
+              << ", nthreads=" << at_detector->nthreads << "\n";
 }
 
 ApriltagUtils::~ApriltagUtils() {
     std::cout << "Destroying AprilTag detector...\n";
     
     if (tag_family) {
-        // Destroy the appropriate family
-        // Note: You need to call the correct destroy function for the family used
-        // For simplicity, we'll use tag36h11_destroy as an example
-        // In production, you'd track which family was created
         apriltag_detector_remove_family(at_detector, tag_family);
-        tag36h11_destroy(tag_family); // Adjust based on family used
+        
+        // Destroy the appropriate family
+        if (family_name == "tag36h11") {
+            tag36h11_destroy(tag_family);
+        } else if (family_name == "tag25h9") {
+            tag25h9_destroy(tag_family);
+        } else if (family_name == "tag16h5") {
+            tag16h5_destroy(tag_family);
+        } else if (family_name == "tagCircle21h7") {
+            tagCircle21h7_destroy(tag_family);
+        } else if (family_name == "tagCircle49h12") {
+            tagCircle49h12_destroy(tag_family);
+        } else if (family_name == "tagCustom48h12") {
+            tagCustom48h12_destroy(tag_family);
+        } else if (family_name == "tagStandard41h12") {
+            tagStandard41h12_destroy(tag_family);
+        } else if (family_name == "tagStandard52h13") {
+            tagStandard52h13_destroy(tag_family);
+        }
     }
     
     if (at_detector) {
@@ -148,57 +169,47 @@ std::vector<TagDetection> ApriltagUtils::get_tags(const cv::Mat& frame) {
         // Calculate center
         tag_det.center = cv::Point2f(det->c[0], det->c[1]);
         
-        // Prepare points for pose estimation
-        std::vector<cv::Point3f> object_points;
-        double half_size = tag_size_meters / 2.0;
-        object_points.push_back(cv::Point3f(-half_size, -half_size, 0));
-        object_points.push_back(cv::Point3f( half_size, -half_size, 0));
-        object_points.push_back(cv::Point3f( half_size,  half_size, 0));
-        object_points.push_back(cv::Point3f(-half_size,  half_size, 0));
-        std::vector<cv::Point2f> undistorted_corners;
-        cv::Mat K = cam_matrix.clone();  // Camera matrix as is
-        cv::undistortPoints(tag_det.corners, undistorted_corners,
-                            cam_matrix, dist_coeffs,
-                            cv::Mat::eye(3, 3, CV_32F),  // R matrix
-                            K);      
-        cv::Mat rvec, tvec;
-        bool success = cv::solvePnP(
-            object_points,
-            undistorted_corners,
-            cam_matrix,
-            cv::Mat(),  // Empty - already undistorted
-            rvec, tvec, false,
-            cv::SOLVEPNP_IPPE_SQUARE
-        );
-        // bool success = cv::solvePnP(
-        //     object_points,
-        //     tag_det.corners,
-        //     cam_matrix,
-        //     dist_coeffs,
-        //     rvec,
-        //     tvec,
-        //     false,
-        //     cv::SOLVEPNP_IPPE_SQUARE
-        // );
+        // ========================================
+        // Use AprilTag's native pose estimation
+        // ========================================
+        apriltag_detection_info_t info;
+        info.det = det;
+        info.tagsize = tag_size_meters;
+        info.fx = fx;
+        info.fy = fy;
+        info.cx = cx;
+        info.cy = cy;
         
-        if (success) {
-            // Convert rotation vector to rotation matrix
-            cv::Rodrigues(rvec, tag_det.pose_R);
-            tag_det.pose_t = tvec.clone();
-            
-            // Calculate depth (distance from camera)
-            tag_det.depth = cv::norm(tvec); 
-        } else {
-            std::cerr << "Warning: PnP failed for tag " << det->id << "\n";
-            tag_det.pose_R = cv::Mat::eye(3, 3, CV_64F);
-            tag_det.pose_t = cv::Mat::zeros(3, 1, CV_64F);
-            tag_det.depth = -1.0;
+        // Estimate pose using AprilTag's optimized method
+        apriltag_pose_t pose;
+        double err = estimate_tag_pose(&info, &pose);
+        
+        // Extract rotation matrix
+        tag_det.pose_R = cv::Mat(3, 3, CV_64F);
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                tag_det.pose_R.at<double>(row, col) = MATD_EL(pose.R, row, col);
+            }
         }
+        
+        // Extract translation vector
+        tag_det.pose_t = cv::Mat(3, 1, CV_64F);
+        tag_det.pose_t.at<double>(0, 0) = MATD_EL(pose.t, 0, 0);
+        tag_det.pose_t.at<double>(1, 0) = MATD_EL(pose.t, 1, 0);
+        tag_det.pose_t.at<double>(2, 0) = MATD_EL(pose.t, 2, 0);
+        
+        // Calculate depth (Z component = distance along camera axis)
+        // This is the most accurate distance metric for AprilTags
+        tag_det.depth = MATD_EL(pose.t, 2, 0);  // Z component only
+        
+        // Cleanup pose matrices
+        matd_destroy(pose.R);
+        matd_destroy(pose.t);
         
         detections.push_back(tag_det);
     }
     
-    // Clean up
+    // Clean up detections
     apriltag_detections_destroy(detections_raw);
     
     return detections;
@@ -225,7 +236,7 @@ void ApriltagUtils::get_scaling_factor(const std::vector<TagDetection>& tags,
     
     for (const auto& tag : tags) {
         if (tag.depth <= 0) {
-            continue; // Skip tags with invalid depth
+            continue;
         }
         
         // Get depth map value at tag center
@@ -233,7 +244,7 @@ void ApriltagUtils::get_scaling_factor(const std::vector<TagDetection>& tags,
         int cy = static_cast<int>(tag.center.y);
         
         // Ensure coordinates are within bounds
-        if (cx < 0 || cx >= relative_depth_map.cols || 
+        if (cx < 0 || cx >= relative_depth_map.cols ||
             cy < 0 || cy >= relative_depth_map.rows) {
             continue;
         }
@@ -251,45 +262,47 @@ void ApriltagUtils::get_scaling_factor(const std::vector<TagDetection>& tags,
             if (!frame.empty()) {
                 // Draw tag corners
                 for (size_t i = 0; i < tag.corners.size(); i++) {
-                    cv::line(frame, 
-                            tag.corners[i], 
-                            tag.corners[(i + 1) % 4], 
+                    cv::line(frame,
+                            tag.corners[i],
+                            tag.corners[(i + 1) % 4],
                             cv::Scalar(0, 255, 0), 2);
                 }
                 
                 // Draw center point
                 cv::circle(frame, tag.center, 5, cv::Scalar(255, 0, 0), -1);
                 
-                // Draw tag ID and depth
-                std::string label = "ID:" + std::to_string(tag.id) + 
-                                   " D:" + std::to_string(tag.depth).substr(0, 4) + "m";
-                cv::putText(frame, label, 
+                // Draw tag ID and depth in cm
+                std::string label = "ID:" + std::to_string(tag.id) +
+                                  " " + std::to_string(static_cast<int>(tag.depth * 100)) + "cm";
+                cv::putText(frame, label,
                            cv::Point(tag.center.x + 10, tag.center.y - 10),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                           cv::FONT_HERSHEY_SIMPLEX, 0.5,
                            cv::Scalar(0, 255, 255), 2);
                 
                 // Draw coordinate axes
                 std::vector<cv::Point3f> axis_points;
                 axis_points.push_back(cv::Point3f(0, 0, 0));
-                axis_points.push_back(cv::Point3f(tag_size_meters, 0, 0)); // X-axis (red)
-                axis_points.push_back(cv::Point3f(0, tag_size_meters, 0)); // Y-axis (green)
-                axis_points.push_back(cv::Point3f(0, 0, tag_size_meters)); // Z-axis (blue)
+                axis_points.push_back(cv::Point3f(tag_size_meters, 0, 0));
+                axis_points.push_back(cv::Point3f(0, tag_size_meters, 0));
+                axis_points.push_back(cv::Point3f(0, 0, tag_size_meters));
                 
                 std::vector<cv::Point2f> image_points;
-                cv::projectPoints(axis_points, tag.pose_R, tag.pose_t,
+                cv::Mat rvec;
+                cv::Rodrigues(tag.pose_R, rvec);
+                cv::projectPoints(axis_points, rvec, tag.pose_t,
                                 cam_matrix, dist_coeffs, image_points);
                 
                 // Draw axes
-                cv::line(frame, image_points[0], image_points[1], cv::Scalar(0, 0, 255), 2); // X red
-                cv::line(frame, image_points[0], image_points[2], cv::Scalar(0, 255, 0), 2); // Y green
-                cv::line(frame, image_points[0], image_points[3], cv::Scalar(255, 0, 0), 2); // Z blue
+                cv::line(frame, image_points[0], image_points[1], cv::Scalar(0, 0, 255), 2);
+                cv::line(frame, image_points[0], image_points[2], cv::Scalar(0, 255, 0), 2);
+                cv::line(frame, image_points[0], image_points[3], cv::Scalar(255, 0, 0), 2);
             }
         }
     }
     
     if (valid_tags > 0) {
         out_scaling_factor = total_scaling_factor / valid_tags;
-        std::cout << "Scaling factor calculated from " << valid_tags 
+        std::cout << "Scaling factor calculated from " << valid_tags
                   << " tags: " << out_scaling_factor << "\n";
     } else {
         out_scaling_factor = -1.0;

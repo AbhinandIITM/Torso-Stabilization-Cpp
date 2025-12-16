@@ -4,17 +4,17 @@
 #include <chrono>
 #include <iomanip>
 
-
 int main(int argc, char** argv) {
     std::cout << "\n========================================\n";
     std::cout << "  AprilTag Detection Test\n";
+    std::cout << "  Optimized for Multiple Tags\n";
     std::cout << "========================================\n\n";
     
     // Configuration parameters
     const std::string CALIB_DATA_PATH = "src/calib_2.yaml";
     const std::string TAG_FAMILY = "tag36h11";
-    const double TAG_SIZE = 5;  
-    const int CAMERA_ID = 2;  // Fixed camera ID (change to 1 if needed)
+    const double TAG_SIZE = 0.05;  // 5 cm in meters
+    const int CAMERA_ID = 2;
     
     try {
         // Load camera calibration to display info
@@ -44,16 +44,11 @@ int main(int argc, char** argv) {
         std::cout << "Initializing AprilTag detector...\n";
         std::cout << "  - Calibration file: " << CALIB_DATA_PATH << "\n";
         std::cout << "  - Tag family: " << TAG_FAMILY << "\n";
-        std::cout << "  - Tag size: " << TAG_SIZE << " meters\n";
+        std::cout << "  - Tag size: " << TAG_SIZE << " meters (" << (TAG_SIZE * 100) << " cm)\n";
         std::cout << "  - Camera matrix: fx=" << std::fixed << std::setprecision(2) 
                   << fx << ", fy=" << fy << "\n";
         std::cout << "  - Principal point: cx=" << cx << ", cy=" << cy << "\n";
-        std::cout << "  - Distortion coefficients: [";
-        for (int i = 0; i < dist_coeffs.cols; i++) {
-            std::cout << dist_coeffs.at<double>(0, i);
-            if (i < dist_coeffs.cols - 1) std::cout << ", ";
-        }
-        std::cout << "]\n\n";
+        std::cout << "  - Using AprilTag native pose estimation (most accurate)\n\n";
         
         ApriltagUtils apriltag_detector(CALIB_DATA_PATH, TAG_FAMILY, TAG_SIZE);
         
@@ -63,11 +58,6 @@ int main(int argc, char** argv) {
         
         if (!cap.isOpened()) {
             std::cerr << "\nERROR: Could not open camera " << CAMERA_ID << "!\n";
-            std::cerr << "Troubleshooting:\n";
-            std::cerr << "  1. Check permissions: groups | grep video\n";
-            std::cerr << "  2. If not in video group: sudo usermod -a -G video $USER\n";
-            std::cerr << "  3. Check cameras: ls -l /dev/video*\n";
-            std::cerr << "  4. Try changing CAMERA_ID to 0 or 1 in the code\n";
             return 1;
         }
         
@@ -80,23 +70,16 @@ int main(int argc, char** argv) {
         
         std::cout << "Camera " << CAMERA_ID << " opened successfully!\n";
         
-        // Set camera properties (optional)
+        // Set camera properties
         cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
         cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
         cap.set(cv::CAP_PROP_FPS, 30);
         
-        std::cout << "\nCamera properties:\n";
-        std::cout << "  - Resolution: " << cap.get(cv::CAP_PROP_FRAME_WIDTH) 
-                  << "x" << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << "\n";
-        std::cout << "  - FPS: " << cap.get(cv::CAP_PROP_FPS) << "\n\n";
-        
-        std::cout << "Starting detection loop...\n";
-        std::cout << "Controls:\n";
-        std::cout << "  - Press 'q' to quit\n";
-        std::cout << "  - Press 's' to save current frame\n\n";
+        std::cout << "\nStarting detection loop...\n";
+        std::cout << "Controls: 'q' to quit, 's' to save frame\n\n";
         
         cv::Mat frame;
-        int frame_count = 0;  // Keep for internal use only
+        int frame_count = 0;
         
         // For FPS calculation
         auto last_fps_time = std::chrono::high_resolution_clock::now();
@@ -104,8 +87,6 @@ int main(int argc, char** argv) {
         double current_fps = 0.0;
         
         while (true) {
-            auto frame_start = std::chrono::high_resolution_clock::now();
-            
             // Capture frame
             cap >> frame;
             if (frame.empty()) {
@@ -116,8 +97,13 @@ int main(int argc, char** argv) {
             frame_count++;
             fps_frame_count++;
             
+            auto detect_start = std::chrono::high_resolution_clock::now();
+            
             // Detect AprilTags
             std::vector<TagDetection> detections = apriltag_detector.get_tags(frame);
+            
+            auto detect_end = std::chrono::high_resolution_clock::now();
+            double detect_ms = std::chrono::duration<double, std::milli>(detect_end - detect_start).count();
             
             // Calculate FPS every second
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -130,93 +116,70 @@ int main(int argc, char** argv) {
                 last_fps_time = current_time;
             }
             
-            // Draw detections on frame
-            cv::Mat display_frame = frame.clone();
+            // Draw detections on frame (minimal for performance)
+            cv::Mat display_frame = frame;  // No clone for speed
             
             for (const auto& tag : detections) {
-                // Draw corners with different colors
-                std::vector<cv::Scalar> corner_colors = {
-                    cv::Scalar(255, 0, 0),    // Blue
-                    cv::Scalar(0, 255, 0),    // Green
-                    cv::Scalar(0, 0, 255),    // Red
-                    cv::Scalar(255, 255, 0)   // Cyan
-                };
-                
-                for (size_t i = 0; i < tag.corners.size(); i++) {
-                    cv::circle(display_frame, tag.corners[i], 6, 
-                             corner_colors[i], -1);
-                    
-                    // Draw lines between corners
-                    size_t next = (i + 1) % tag.corners.size();
+                // Draw corners (simple lines)
+                for (size_t i = 0; i < 4; i++) {
+                    size_t next = (i + 1) % 4;
                     cv::line(display_frame, tag.corners[i], tag.corners[next], 
                             cv::Scalar(0, 255, 0), 2);
                 }
                 
                 // Draw center
-                cv::circle(display_frame, tag.center, 8, 
-                         cv::Scalar(0, 0, 255), -1);
+                cv::circle(display_frame, tag.center, 5, cv::Scalar(0, 0, 255), -1);
                 
-                // Draw tag ID with background
-                std::string id_text = "ID: " + std::to_string(tag.id);
-                int baseline = 0;
-                cv::Size text_size = cv::getTextSize(id_text, cv::FONT_HERSHEY_SIMPLEX, 
-                                                     0.8, 2, &baseline);
-                cv::Point text_origin(tag.center.x + 15, tag.center.y - 15);
-                cv::rectangle(display_frame, 
-                            text_origin + cv::Point(0, baseline),
-                            text_origin + cv::Point(text_size.width, -text_size.height),
-                            cv::Scalar(0, 0, 0), cv::FILLED);
-                cv::putText(display_frame, id_text, text_origin,
-                          cv::FONT_HERSHEY_SIMPLEX, 0.8, 
+                // Draw tag ID and distance in cm
+                std::ostringstream label_stream;
+                label_stream << "ID:" << tag.id << " " 
+                            << std::fixed << std::setprecision(1) 
+                            << (tag.depth * 100.0) << "cm";
+                std::string label = label_stream.str();
+                
+                cv::putText(display_frame, label,
+                          cv::Point(tag.center.x + 10, tag.center.y - 10),
+                          cv::FONT_HERSHEY_SIMPLEX, 0.6, 
                           cv::Scalar(0, 255, 255), 2);
                 
-                // Draw depth if available
-                // Draw depth if available
-                if (tag.depth > 0) {
-                    std::ostringstream depth_stream;
-                    depth_stream << std::fixed << std::setprecision(2) << (tag.depth * 1000);  // Convert to mm
-                    std::string depth_text = depth_stream.str() + "mm";
-                    cv::putText(display_frame, depth_text,
-                                cv::Point(tag.center.x + 15, tag.center.y + 15),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                                cv::Scalar(255, 255, 0), 2);
-                }
-
-                
-                // Print detection info every 30 frames
-                if (frame_count % 30 == 0) {
-                    std::cout << "Tag ID: " << tag.id
+                // Print detection info every 60 frames
+                if (frame_count % 60 == 0) {
+                    std::cout << "Tag ID " << tag.id
+                             << ": " << std::fixed << std::setprecision(1) 
+                             << (tag.depth * 100.0) << " cm"
                              << " at (" << static_cast<int>(tag.center.x) 
-                             << ", " << static_cast<int>(tag.center.y) << ")";
-                    if (tag.depth > 0) {
-                        std::cout << ", depth: " << tag.depth << "m";
-                    }
-                    std::cout << "\n";
+                             << ", " << static_cast<int>(tag.center.y) << ")\n";
                 }
             }
             
-            // Draw minimal info panel - only FPS
+            // Draw compact info panel
             cv::rectangle(display_frame, cv::Point(5, 5), 
-                        cv::Point(150, 45), cv::Scalar(0, 0, 0), cv::FILLED);
+                        cv::Point(220, 85), cv::Scalar(0, 0, 0), cv::FILLED);
             
-            std::string fps_text = "FPS: " + std::to_string(static_cast<int>(current_fps));
+            std::ostringstream fps_stream, tags_stream, time_stream;
+            fps_stream << "FPS: " << std::fixed << std::setprecision(1) << current_fps;
+            tags_stream << "Tags: " << detections.size();
+            time_stream << "Detect: " << std::fixed << std::setprecision(1) << detect_ms << "ms";
             
-            cv::putText(display_frame, fps_text, cv::Point(15, 30),
-                       cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+            cv::putText(display_frame, fps_stream.str(), cv::Point(15, 25),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 255), 1);
+            cv::putText(display_frame, tags_stream.str(), cv::Point(15, 45),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 255), 1);
+            cv::putText(display_frame, time_stream.str(), cv::Point(15, 65),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
             
             // Show frame
-            cv::imshow("AprilTag Detection Test", display_frame);
+            cv::imshow("AprilTag Detection", display_frame);
             
             // Handle keyboard input
             char key = cv::waitKey(1);
-            if (key == 'q' || key == 'Q' || key == 27) {  // 27 = ESC
+            if (key == 'q' || key == 'Q' || key == 27) {
                 std::cout << "\nQuitting...\n";
                 break;
             } else if (key == 's' || key == 'S') {
-                std::string filename = "apriltag_frame_" + 
-                    std::to_string(frame_count) + ".jpg";
-                cv::imwrite(filename, display_frame);
-                std::cout << "Saved frame to " << filename << "\n";
+                std::string filename = "apriltag_" + std::to_string(frame_count) + ".jpg";
+                cv::imwrite(filename, frame);  // Save original, not display_frame
+                std::cout << "Saved to " << filename << "\n";
             }
         }
         
@@ -224,14 +187,11 @@ int main(int argc, char** argv) {
         cap.release();
         cv::destroyAllWindows();
         
-    } catch (const cv::Exception& e) {
-        std::cerr << "OpenCV ERROR: " << e.what() << "\n";
-        return 1;
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << "\n";
         return 1;
     }
     
-    std::cout << "Test completed successfully!\n";
+    std::cout << "Test completed!\n";
     return 0;
 }
