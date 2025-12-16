@@ -756,3 +756,10 @@ http_archive(
     strip_prefix = "apriltag-3.4.2",
     urls = ["https://github.com/AprilRobotics/apriltag/archive/refs/tags/v3.4.2.tar.gz"],
 )
+# ───────── Open3D ─────────
+
+new_local_repository(
+    name = "open3d",
+    path = "third_party/open3d",
+    build_file = "@//third_party:open3d.BUILD",  # Use label format with @//
+)

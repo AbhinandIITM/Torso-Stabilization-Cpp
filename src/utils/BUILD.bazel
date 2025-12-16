@@ -64,12 +64,3 @@ cc_library(
     copts = ["-std=c++17"],
     visibility = ["//visibility:public"],
 )
-
-cc_library(
-    name = "mediapipe_utils",
-    srcs = ["mp_utils.cpp"],
-    deps = [
-        "//include/utils:mp_utils",
-    ],
-    visibility = ["//visibility:public"],
-)

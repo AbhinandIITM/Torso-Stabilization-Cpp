@@ -41,4 +41,5 @@
 *.dwo
 
 third_party/libtorch/
+third_party/open3d/
 src/models/

@@ -1,37 +1,77 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 
+package(default_visibility = ["//visibility:public"])
+
 exports_files(["calib.json", "calib.yaml", "calib_2.yaml",])
+
+# ============================================================================
+# State Command Library
+# ============================================================================
 
 cc_library(
     name = "state_command",
     srcs = ["state_command.cpp"],
     hdrs = ["//include:state_command"],
     deps = [
-        "@opencv//:opencv",
+        "//include:state_command",
+        "@linux_opencv//:opencv",  # Changed
+        "@eigen//:eigen3",
+    ],
+    copts = ["-I."],
+    visibility = ["//visibility:public"],
+)
+
+# ============================================================================
+# Tracking State Library
+# ============================================================================
+
+cc_library(
+    name = "tracking_state",
+    srcs = ["tracking_state.cpp"],
+    hdrs = ["//include:tracking_state"],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-O3",
+        "-I.",
+    ],
+    deps = [
+        "//include:tracking_state",
         "@eigen//:eigen3",
     ],
     visibility = ["//visibility:public"],
 )
+
+# ============================================================================
+# Idle State Library
+# ============================================================================
 
 cc_library(
     name = "idle_state",
     srcs = ["idle_state.cpp"],
     hdrs = ["//include:idle_state"],
     deps = [
+        "//include:idle_state",
         ":state_command",
+        ":tracking_state",
         "//src/utils:imu_server",
         "//src/utils:imu_tracker",
-        "@opencv//:opencv",
+        "@linux_opencv//:opencv",  # Changed
         "@open3d//:open3d",
         "@eigen//:eigen3",
         "@com_github_nlohmann_json//:json",
-        "//src/utils:mediapipe_utils",
+        "//src/utils:mp_utils",
         "//src/utils:midas_utils",
         "//src/utils:apriltag_utils",
     ],
-    copts = ["-std=c++17"],
+    copts = ["-std=c++17", "-I."],
     visibility = ["//visibility:public"],
 )
+
+# ============================================================================
+# Main Binary
+# ============================================================================
 
 cc_binary(
     name = "main",
@@ -39,7 +79,13 @@ cc_binary(
     deps = [
         ":idle_state",
         ":state_command",
-        "@opencv//:opencv",
+        ":tracking_state",
+        "@linux_opencv//:opencv",
+        "@eigen//:eigen3",
     ],
     copts = ["-std=c++17"],
+    data = [
+        "//src/models:dpt_swin2_tiny_256_torchscript",
+        ":calib_2.yaml",
+    ],
 )

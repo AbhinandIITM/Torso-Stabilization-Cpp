@@ -1,22 +1,48 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
+# ============================================================================
+# State Command Header
+# ============================================================================
+
 cc_library(
     name = "state_command",
     hdrs = ["state_command.hpp"],
+    includes = ["."],
     deps = [
-        "@opencv//:opencv",
+        "@linux_opencv//:opencv",  # Changed
         "@eigen//:eigen3",
     ],
     visibility = ["//visibility:public"],
 )
 
+# ============================================================================
+# Tracking State Header
+# ============================================================================
+
+cc_library(
+    name = "tracking_state",
+    hdrs = ["tracking_state.hpp"],
+    includes = ["."],
+    deps = [
+        "@eigen//:eigen3",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# ============================================================================
+# Idle State Header
+# ============================================================================
+
 cc_library(
     name = "idle_state",
     hdrs = ["idle_state.hpp"],
+    includes = ["."],
     deps = [
         ":state_command",
-        "@opencv//:opencv",
+        ":tracking_state",
+        "@linux_opencv//:opencv",  # Changed
         "@open3d//:open3d",
+        "@eigen//:eigen3",
     ],
     visibility = ["//visibility:public"],
 )
