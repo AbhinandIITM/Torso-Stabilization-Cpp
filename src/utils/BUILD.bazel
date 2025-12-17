@@ -64,3 +64,13 @@ cc_library(
     copts = ["-std=c++17"],
     visibility = ["//visibility:public"],
 )
+cc_library(
+    name = "fastsam_utils",
+    srcs = ["fastsam_utils.cpp"],
+    deps = [
+        "//include/utils:fastsam_utils",
+        "@libtorch//:torch",
+        "@linux_opencv//:opencv",
+    ],
+    visibility = ["//visibility:public"],
+)

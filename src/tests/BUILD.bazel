@@ -47,3 +47,16 @@ cc_binary(
         "//src:calib_2.yaml",  # Changed to YAML
     ],
 )
+cc_binary(
+    name = "fastsam_test",
+    srcs = ["fastsam_test.cpp"],
+    deps = [
+        "//src/utils:fastsam_utils",
+        "@linux_opencv//:opencv",
+        "@bazel_tools//tools/cpp/runfiles", 
+    ],
+    data = [
+        "//src/models:FastSAM-s",
+        "//src/models:FastSAM-x",
+    ],
+)

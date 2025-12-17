@@ -3,3 +3,13 @@ filegroup(
     srcs = ["dpt_swin2_tiny_256_torchscript.pt"],
     visibility = ["//visibility:public"],
 )
+filegroup(
+    name = "FastSAM-s",
+    srcs = ["FastSAM-s.torchscript"],
+    visibility = ["//visibility:public"],
+)
+filegroup(
+    name = "FastSAM-x",
+    srcs = ["FastSAM-x.torchscript"],
+    visibility = ["//visibility:public"],
+)

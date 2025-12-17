@@ -41,3 +41,13 @@ cc_library(
         "@apriltag//:apriltag",
     ],
 )
+cc_library(
+    name = "fastsam_utils",
+    hdrs = ["fastsam_utils.hpp"],
+    include_prefix = "utils",
+    deps = [
+        "@libtorch//:torch",
+        "@linux_opencv//:opencv",
+    ],
+    visibility = ["//visibility:public"],
+)
