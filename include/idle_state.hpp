@@ -12,6 +12,8 @@
 #include "utils/IMU_server.hpp"
 #include "utils/IMU_tracker.hpp"
 #include "utils/apriltag_utils.hpp"
+#include "utils/fastsam_utils.hpp"
+
 
 class IdleState {
  public:
@@ -33,6 +35,7 @@ class IdleState {
   // Utility objects with correct namespaces
   std::unique_ptr<utils::HandLandmarkerMP> pipe_utils;
   std::unique_ptr<MiDaSDepth> midas_utils;
+  std::unique_ptr<FastSAMSegmenter> fastsam_utils_;
   std::unique_ptr<utils::IMUServer> imu_server;  // IN utils namespace
   std::unique_ptr<IMUTracker> imu_tracker;       // NOT in namespace!
 

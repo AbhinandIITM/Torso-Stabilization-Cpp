@@ -57,6 +57,7 @@ cc_library(
         ":tracking_state",
         "//src/utils:imu_server",
         "//src/utils:imu_tracker",
+        "//src/utils:fastsam_utils",
         "@linux_opencv//:opencv",  # Changed
         "@open3d//:open3d",
         "@eigen//:eigen3",
@@ -87,5 +88,7 @@ cc_binary(
     data = [
         "//src/models:dpt_swin2_tiny_256_torchscript",
         ":calib_2.yaml",
+        "//src/models:FastSAM-x",
+        "//src/models:FastSAM-s",
     ],
 )
