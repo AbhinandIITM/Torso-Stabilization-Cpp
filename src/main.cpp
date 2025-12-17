@@ -7,16 +7,15 @@
 
 int main(int argc, char** argv) {
     std::cout << "========================================\n";
-    std::cout << "  Torso Stabilization System\n";
+    std::cout << "  Torso Stabilization System v2.0\n";
     std::cout << "========================================\n\n";
 
+    // Configuration paths
     std::string midas_model_path = "src/models/dpt_swin2_tiny_256_torchscript.pt";
+    std::string calib_path = "src/calib_2.yaml";
+    int camera_id = 2;  // Default to camera 2
 
     // Parse command line arguments
-    std::string calib_path = "src/calib_2.yaml";
-    
-    int camera_id = 2;
-
     if (argc > 1) camera_id = std::atoi(argv[1]);
     if (argc > 2) calib_path = argv[2];
     if (argc > 3) midas_model_path = argv[3];
@@ -24,7 +23,7 @@ int main(int argc, char** argv) {
     std::cout << "Configuration:\n";
     std::cout << "  Camera ID: " << camera_id << "\n";
     std::cout << "  Calibration: " << calib_path << "\n";
-    std::cout << "  Midas Model: " << midas_model_path << "\n\n";
+    std::cout << "  MiDaS Model: " << midas_model_path << "\n\n";
 
     // Open camera
     cv::VideoCapture cap(camera_id);
@@ -38,44 +37,71 @@ int main(int argc, char** argv) {
               << "x" << cap.get(cv::CAP_PROP_FRAME_HEIGHT) << "\n\n";
 
     try {
-        // Create StateCommand
+        // Create shared state command
         StateCommand state_command;
+        state_command.current_state = SystemState::IDLE;
 
-        // Initialize tracking state with configuration
-        std::cout << "Initializing TrackingState module...\n";
-        torso_stabilization::TrackingState::TrackingConfig tracking_config;
-        
-        // Configure trajectory analyzer
-        tracking_config.trajectory_config.trajectory_window_ms = 500.0f;
-        tracking_config.trajectory_config.min_movement_threshold_cm = 2.0f;
-        tracking_config.trajectory_config.velocity_magnitude_threshold_cm_per_s = 5.0f;
-        
-        // Configure object scoring
-        tracking_config.scoring_config.angle_weight = 0.6f;
-        tracking_config.scoring_config.distance_weight = 0.4f;
-        tracking_config.scoring_config.max_reach_distance_m = 0.8f;
-        tracking_config.scoring_config.reach_direction_angle_deg = 45.0f;
-        
-        // Configure finalization
-        tracking_config.object_finalization_duration_ms = 350.0f;
-        tracking_config.min_focus_frames = 8;
-        tracking_config.focus_angle_threshold_deg = 20.0f;
-        tracking_config.min_score_to_start_finalization = 0.5f;
-        
-        auto tracking_state = std::make_shared<torso_stabilization::TrackingState>(tracking_config);
-        std::cout << "TrackingState initialized successfully\n\n";
-
-        // Create and run IdleState
-        std::cout << "Starting IdleState...\n";
-        IdleState idle_state(state_command, cap, calib_path, midas_model_path, tracking_state);
-        
-        std::cout << "Running main loop. Press 'q' in any window to quit.\n\n";
-        idle_state.run();
+        // State machine loop
+        while (state_command.current_state != SystemState::SHUTDOWN) {
+            
+            switch (state_command.current_state) {
+                case SystemState::IDLE: {
+                    std::cout << "\n========================================\n";
+                    std::cout << "  ENTERING IDLE STATE\n";
+                    std::cout << "========================================\n\n";
+                    
+                    IdleState idle_state(state_command, cap, calib_path, midas_model_path);
+                    SystemState next_state = idle_state.run();
+                    state_command.current_state = next_state;
+                    break;
+                }
+                
+                case SystemState::TRACKING: {
+                    std::cout << "\n========================================\n";
+                    std::cout << "  ENTERING TRACKING STATE\n";
+                    std::cout << "========================================\n\n";
+                    
+                    TrackingState tracking_state(state_command, cap);
+                    SystemState next_state = tracking_state.run();
+                    state_command.current_state = next_state;
+                    break;
+                }
+                
+                case SystemState::ERROR: {
+                    std::cerr << "\n========================================\n";
+                    std::cerr << "  ERROR STATE\n";
+                    std::cerr << "========================================\n";
+                    std::cerr << "Error: " << state_command.error_message << "\n\n";
+                    std::cerr << "Press any key to retry or ESC to quit\n";
+                    
+                    char key = cv::waitKey(0);
+                    if (key == 27) { // ESC
+                        state_command.current_state = SystemState::SHUTDOWN;
+                    } else {
+                        state_command.current_state = SystemState::IDLE;
+                        state_command.error_message.clear();
+                    }
+                    break;
+                }
+                
+                case SystemState::SHUTDOWN:
+                    // Will exit loop
+                    break;
+            }
+        }
         
         std::cout << "\nShutting down...\n";
+        
+        // Cleanup shared components
+        if (state_command.midas_utils) delete state_command.midas_utils;
+        if (state_command.fastsam_utils) delete state_command.fastsam_utils;
+        if (state_command.apriltag_utils) delete state_command.apriltag_utils;
+        if (state_command.mediapipe_utils) delete state_command.mediapipe_utils;
+        if (state_command.imu_server) delete state_command.imu_server;
+        if (state_command.imu_tracker) delete state_command.imu_tracker;
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << "\n";
+        std::cerr << "Fatal Error: " << e.what() << "\n";
         cap.release();
         return -1;
     }

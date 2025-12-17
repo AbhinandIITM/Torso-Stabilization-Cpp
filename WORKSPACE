@@ -681,13 +681,6 @@ http_archive(
 
 # ───────── OpenCV + FFmpeg + Python runtime (local) ─────────
 
-http_archive(
-    name = "opencv",
-    build_file = "@//third_party:opencv.BUILD",
-    strip_prefix = "opencv-3.4.11",
-    urls = ["https://github.com/opencv/opencv/archive/3.4.11.tar.gz"],
-    sha256 = "10898a0268d8f8cbaf0354ddd1d9de6abaac84e3d9a6c9754f56a0aa3383d73b",
-)
 
 
 new_local_repository(

@@ -1,410 +1,450 @@
-// src/tracking_state.cpp
+#include "include/tracking_state.hpp"
+#include <iostream>
+#include <chrono>
 
-#include "include/tracking_state.hpp" 
-
-#include <algorithm>
-#include <cmath>
-
-namespace torso_stabilization {
-
-// ====================== KalmanFilterTrajectory ======================
-
-KalmanFilterTrajectory::KalmanFilterTrajectory()
-    : state_(Eigen::VectorXf::Zero(6)),
-      covariance_(Eigen::MatrixXf::Identity(6, 6)),
-      process_noise_(Eigen::MatrixXf::Identity(6, 6)),
-      F_(Eigen::MatrixXf::Identity(6, 6)),
-      H_(Eigen::MatrixXf::Zero(3, 6)),
-      is_initialized_(false) {
-  // Measurement matrix: observe position only (x, y, z)
-  H_(0, 0) = 1.0f;
-  H_(1, 1) = 1.0f;
-  H_(2, 2) = 1.0f;
-
-  // Simple process noise: small for position, larger for velocity
-  const float q_pos = 0.01f;
-  const float q_vel = 0.1f;
-  process_noise_.setZero();
-  process_noise_.block<3,3>(0,0) = q_pos * Eigen::Matrix3f::Identity();
-  process_noise_.block<3,3>(3,3) = q_vel * Eigen::Matrix3f::Identity();
-}
-
-void KalmanFilterTrajectory::Initialize(const Eigen::Vector3f& initial_position,
-                                        float dt) {
-  state_.setZero();
-  state_.head<3>() = initial_position;
-
-  covariance_.setIdentity();
-  covariance_.block<3,3>(0,0) *= 0.1f;  // position uncertainty
-  covariance_.block<3,3>(3,3) *= 0.5f;  // velocity uncertainty
-
-  F_.setIdentity();
-  F_.block<3,3>(0,3) = dt * Eigen::Matrix3f::Identity();
-
-  is_initialized_ = true;
-}
-
-void KalmanFilterTrajectory::Predict(float dt) {
-  if (!is_initialized_) return;
-
-  F_.setIdentity();
-  F_.block<3,3>(0,3) = dt * Eigen::Matrix3f::Identity();
-
-  state_ = F_ * state_;
-  covariance_ = F_ * covariance_ * F_.transpose() + process_noise_;
-}
-
-void KalmanFilterTrajectory::Update(const Eigen::Vector3f& measurement,
-                                    float measurement_noise) {
-  if (!is_initialized_) return;
-
-  Eigen::Vector3f z = measurement;
-  Eigen::Vector3f y = z - H_ * state_;
-
-  Eigen::Matrix3f R = measurement_noise * Eigen::Matrix3f::Identity();
-  Eigen::Matrix3f S = H_ * covariance_ * H_.transpose() + R;
-  Eigen::Matrix<float, 6, 3> K = covariance_ * H_.transpose() * S.inverse();
-
-  state_ = state_ + K * y;
-
-  Eigen::MatrixXf I = Eigen::MatrixXf::Identity(6, 6);
-  covariance_ = (I - K * H_) * covariance_;
-}
-
-// ====================== ObjectScoringEngine ======================
-
-ObjectScoringEngine::ObjectScoringEngine() = default;
-
-ObjectScoringEngine::ObjectScoringEngine(const ScoringConfig& config)
-    : config_(config) {}
-
-std::vector<float> ObjectScoringEngine::ScoreObjects(
-    const Eigen::Vector3f& hand_position,
-    const Eigen::Vector3f& reach_direction,
-    const std::vector<DetectedObject>& objects) const {
-  std::vector<float> scores;
-  scores.reserve(objects.size());
-  for (const auto& obj : objects) {
-    scores.push_back(ScoreSingleObject(hand_position, reach_direction, obj));
-  }
-  return scores;
-}
-
-float ObjectScoringEngine::ScoreSingleObject(
-    const Eigen::Vector3f& hand_position,
-    const Eigen::Vector3f& reach_direction,
-    const DetectedObject& object) const {
-  Eigen::Vector3f hand_to_object = object.center_3d - hand_position;
-  float distance = hand_to_object.norm();
-  float angle_score = ComputeAngleScore(reach_direction, hand_to_object);
-  float distance_score = ComputeDistanceScore(distance);
-
-  float score = config_.angle_weight * angle_score +
-                config_.distance_weight * distance_score;
-  return std::clamp(score, 0.0f, 1.0f);
-}
-
-float ObjectScoringEngine::ComputeAngleScore(
-    const Eigen::Vector3f& reach_direction,
-    const Eigen::Vector3f& hand_to_object) const {
-  if (hand_to_object.norm() < 1e-6f) return 0.0f;
-
-  Eigen::Vector3f dir_obj = hand_to_object.normalized();
-  float cos_angle = reach_direction.dot(dir_obj);
-  cos_angle = std::clamp(cos_angle, -1.0f, 1.0f);
-  float angle_rad = std::acos(cos_angle);
-  float angle_deg = angle_rad * 180.0f / static_cast<float>(M_PI);
-
-  float cone = config_.reach_direction_angle_deg;
-  if (angle_deg <= cone) {
-    // Linear falloff inside cone
-    return 1.0f - angle_deg / cone;
-  }
-  // Outside cone, quickly drop to 0
-  return std::max(0.0f, 1.0f - (angle_deg - cone) / 90.0f);
-}
-
-float ObjectScoringEngine::ComputeDistanceScore(float distance_m) const {
-  if (distance_m <= 0.0f) return 1.0f;
-  if (distance_m >= config_.max_reach_distance_m) return 0.0f;
-
-  float x = distance_m / config_.max_reach_distance_m;
-  float s = 1.0f - x * x;  // quadratic falloff
-  return std::clamp(s, 0.0f, 1.0f);
-}
-
-// ====================== TrajectoryAnalyzer ======================
-
-TrajectoryAnalyzer::TrajectoryAnalyzer() = default;
-
-TrajectoryAnalyzer::TrajectoryAnalyzer(const TrajectoryConfig& config)
-    : config_(config) {}
-
-void TrajectoryAnalyzer::AddHandPosition(const Eigen::Vector3f& position,
-                                         int64_t timestamp_ns) {
-  position_history_.push_back({position, timestamp_ns});
-  PruneOldSamples(timestamp_ns);
-}
-
-bool TrajectoryAnalyzer::ComputeTrajectoryDirection(
-    Eigen::Vector3f& out_direction) const {
-  if (position_history_.size() < 2) return false;
-
-  const auto& start = position_history_.front();
-  const auto& end   = position_history_.back();
-  Eigen::Vector3f disp = end.position - start.position;
-  float dist_cm = disp.norm() * 100.0f;
-  if (dist_cm < config_.min_movement_threshold_cm) return false;
-
-  int64_t dt_ns = end.timestamp_ns - start.timestamp_ns;
-  if (dt_ns <= 0) return false;
-  float dt_s = static_cast<float>(dt_ns) / 1e9f;
-
-  Eigen::Vector3f vel = disp / dt_s;
-  float vel_cm_s = vel.norm() * 100.0f;
-  if (vel_cm_s < config_.velocity_magnitude_threshold_cm_per_s) return false;
-
-  out_direction = vel.normalized();
-  return true;
-}
-
-Eigen::Vector3f TrajectoryAnalyzer::GetHandVelocity() const {
-  if (position_history_.size() < 2) return Eigen::Vector3f::Zero();
-
-  const auto& start = position_history_.front();
-  const auto& end   = position_history_.back();
-  int64_t dt_ns = end.timestamp_ns - start.timestamp_ns;
-  if (dt_ns <= 0) return Eigen::Vector3f::Zero();
-
-  float dt_s = static_cast<float>(dt_ns) / 1e9f;
-  Eigen::Vector3f disp = end.position - start.position;
-  return disp / dt_s;  // m/s
-}
-
-float TrajectoryAnalyzer::GetTotalMovement() const {
-  if (position_history_.size() < 2) return 0.0f;
-  float total = 0.0f;
-  for (size_t i = 1; i < position_history_.size(); ++i) {
-    total += (position_history_[i].position -
-              position_history_[i - 1].position).norm();
-  }
-  return total * 100.0f;  // cm
-}
-
-void TrajectoryAnalyzer::PruneOldSamples(int64_t current_time_ns) {
-  const int64_t window_ns =
-      static_cast<int64_t>(config_.trajectory_window_ms * 1e6);
-  while (!position_history_.empty() &&
-         current_time_ns - position_history_.front().timestamp_ns > window_ns) {
-    position_history_.pop_front();
-  }
-}
-
-// ====================== TrackingState ======================
-
-TrackingState::TrackingState()
-    : current_state_(State::WAITING),
-      kalman_filter_(std::make_unique<KalmanFilterTrajectory>()),
-      trajectory_analyzer_(std::make_unique<TrajectoryAnalyzer>()),
-      scoring_engine_(std::make_unique<ObjectScoringEngine>()),
-      target_object_index_(-1),
-      finalization_frame_count_(0),
-      finalization_start_timestamp_ns_(0),
-      last_focus_angle_deg_(0.0f) {}
-
-TrackingState::TrackingState(const TrackingConfig& config)
-    : current_state_(State::WAITING),
-      config_(config),
-      kalman_filter_(std::make_unique<KalmanFilterTrajectory>()),
-      trajectory_analyzer_(
-          std::make_unique<TrajectoryAnalyzer>(config.trajectory_config)),
-      scoring_engine_(
-          std::make_unique<ObjectScoringEngine>(config.scoring_config)),
-      target_object_index_(-1),
-      finalization_frame_count_(0),
-      finalization_start_timestamp_ns_(0),
-      last_focus_angle_deg_(0.0f) {}
-
-TrackingState::State TrackingState::ProcessFrame(
-    const HandFrame& hand_frame,
-    const std::vector<DetectedObject>& objects,
-    int64_t current_timestamp_ns) {
-  switch (current_state_) {
-    case State::WAITING:
-      HandleWaiting(hand_frame);
-      break;
-
-    case State::TRACKING:
-      HandleTracking(hand_frame, objects);
-      break;
-
-    case State::OBJECT_FINALIZING:
-      HandleFinalizing(hand_frame, objects, current_timestamp_ns);
-      break;
-
-    case State::OBJECT_FINALIZED:
-      // Remain finalized until external reset
-      break;
-
-    case State::RESET:
-      Reset();
-      break;
-  }
-  return current_state_;
-}
-
-void TrackingState::HandleWaiting(const HandFrame& hand_frame) {
-  if (!hand_frame.detected || hand_frame.landmarks.empty()) return;
-
-  const Eigen::Vector3f& wrist = hand_frame.landmarks[0].position;
-  kalman_filter_->Initialize(wrist, 1.0f / 30.0f);
-  trajectory_analyzer_->Reset();
-  trajectory_analyzer_->AddHandPosition(wrist, hand_frame.timestamp_ns);
-
-  current_state_ = State::TRACKING;
-}
-
-void TrackingState::HandleTracking(const HandFrame& hand_frame,
-                                   const std::vector<DetectedObject>& objects) {
-  if (!hand_frame.detected || hand_frame.landmarks.empty()) {
-    current_state_ = State::WAITING;
-    return;
-  }
-
-  const Eigen::Vector3f& wrist = hand_frame.landmarks[0].position;
-  kalman_filter_->Predict(1.0f / 30.0f);
-  kalman_filter_->Update(wrist);
-
-  trajectory_analyzer_->AddHandPosition(wrist, hand_frame.timestamp_ns);
-
-  Eigen::Vector3f dir;
-  if (!trajectory_analyzer_->ComputeTrajectoryDirection(dir)) {
-    // Not enough movement yet
-    return;
-  }
-  current_reach_direction_ = dir;
-
-  Eigen::Vector3f hand_pos = kalman_filter_->GetPosition();
-  current_object_scores_ =
-      scoring_engine_->ScoreObjects(hand_pos, current_reach_direction_, objects);
-
-  int best_idx = FindBestScoredObject();
-  if (best_idx >= 0 && current_object_scores_[best_idx] > config_.min_score_to_start_finalization) {
-    target_object_index_ = best_idx;
-    finalization_frame_count_ = 1;
-    finalization_start_timestamp_ns_ = hand_frame.timestamp_ns;
-    last_focus_angle_deg_ = 0.0f;
-    current_state_ = State::OBJECT_FINALIZING;
-  }
-}
-
-void TrackingState::HandleFinalizing(const HandFrame& hand_frame,
-                                     const std::vector<DetectedObject>& objects,
-                                     int64_t timestamp_ns) {
-  if (!hand_frame.detected || hand_frame.landmarks.empty()) {
-    // Lost hand → back to tracking
-    current_state_ = State::TRACKING;
-    target_object_index_ = -1;
-    finalization_frame_count_ = 0;
-    return;
-  }
-
-  const Eigen::Vector3f& wrist = hand_frame.landmarks[0].position;
-  kalman_filter_->Predict(1.0f / 30.0f);
-  kalman_filter_->Update(wrist);
-  trajectory_analyzer_->AddHandPosition(wrist, hand_frame.timestamp_ns);
-
-  Eigen::Vector3f dir;
-  if (trajectory_analyzer_->ComputeTrajectoryDirection(dir)) {
-    if (!IsTrajectoryConsistentWithTarget(dir, objects)) {
-      // User changed direction → restart
-      current_state_ = State::TRACKING;
-      target_object_index_ = -1;
-      finalization_frame_count_ = 0;
-      return;
+TrackingState::TrackingState(StateCommand& state_command,
+                             cv::VideoCapture& cap)
+    : state_command_(state_command),
+      cap_(cap),
+      tracking_active_(false),
+      frames_without_detection_(0) {
+    
+    std::cout << "TrackingState: Constructor called\n";
+    
+    // Get references to shared components from StateCommand
+    midas_utils_ = state_command_.midas_utils;
+    apriltag_utils_ = state_command_.apriltag_utils;
+    mediapipe_utils_ = state_command_.mediapipe_utils;
+    camera_matrix_ = state_command_.camera_matrix;
+    dist_coeffs_ = state_command_.dist_coeffs;
+    
+    // Verify components are initialized
+    if (!midas_utils_ || !apriltag_utils_) {
+        throw std::runtime_error("TrackingState: Required components not initialized!");
     }
-    current_reach_direction_ = dir;
-  }
-
-  ++finalization_frame_count_;
-
-  int64_t dt_ns = timestamp_ns - finalization_start_timestamp_ns_;
-  float dt_ms = static_cast<float>(dt_ns) / 1e6f;
-
-  if (finalization_frame_count_ >= config_.min_focus_frames &&
-      dt_ms >= config_.object_finalization_duration_ms) {
-    current_state_ = State::OBJECT_FINALIZED;
-  }
+    
+    std::cout << "TrackingState: All components verified\n";
 }
 
-int TrackingState::FindBestScoredObject() const {
-  if (current_object_scores_.empty()) return -1;
-  int best_idx = -1;
-  float best_score = -1.0f;
-  for (size_t i = 0; i < current_object_scores_.size(); ++i) {
-    if (current_object_scores_[i] > best_score) {
-      best_score = current_object_scores_[i];
-      best_idx = static_cast<int>(i);
+SystemState TrackingState::run() {
+    std::cout << "TrackingState: Starting tracking loop...\n";
+    std::cout << "Place AprilTag in view to begin tracking\n";
+    std::cout << "Press 'i' to return to IDLE, 'q' or ESC to quit\n\n";
+    
+    int frame_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    
+    while (true) {
+        // Capture frame
+        if (!cap_.read(current_frame_)) {
+            std::cerr << "Error: Failed to capture frame\n";
+            state_command_.error_message = "Camera capture failed";
+            return SystemState::ERROR;
+        }
+        
+        frame_count++;
+        
+        // Process frame
+        processFrame();
+        
+        // Visualize
+        visualizeTracking();
+        
+        // Display
+        cv::imshow("Torso Stabilization - Tracking State", current_frame_);
+        
+        // Calculate and display FPS every 30 frames
+        if (frame_count % 30 == 0) {
+            auto current_time = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                current_time - start_time).count();
+            float fps = (30.0f * 1000.0f) / elapsed;
+            
+            std::cout << "Frame " << frame_count 
+                      << " - FPS: " << fps
+                      << " - Tracking: " << (tracking_active_ ? "ACTIVE" : "SEARCHING")
+                      << " - AprilTag: " << (state_command_.apriltag_detected ? "DETECTED" : "NOT FOUND");
+            
+            if (state_command_.apriltag_detected) {
+                std::cout << " [ID:" << state_command_.apriltag_id 
+                          << " | Depth:" << state_command_.apriltag_position.z() << "m]";
+            }
+            std::cout << " - Hands: " << hand_landmarks_.size();
+            std::cout << "\n";
+            
+            start_time = current_time;
+        }
+        
+        // Check for state transitions
+        char key = cv::waitKey(1);
+        if (key == 'i' || key == 'I') {
+            std::cout << "Returning to IDLE state...\n";
+            return SystemState::IDLE;
+        } else if (key == 'q' || key == 'Q' || key == 27) {
+            std::cout << "Shutdown requested\n";
+            return SystemState::SHUTDOWN;
+        }
     }
-  }
-  return best_idx;
+    
+    return SystemState::IDLE;
 }
 
-bool TrackingState::IsTrajectoryConsistentWithTarget(
-    const Eigen::Vector3f& new_dir,
-    const std::vector<DetectedObject>& objects) const {
-  if (target_object_index_ < 0 ||
-      target_object_index_ >= static_cast<int>(objects.size())) {
-    return false;
-  }
-
-  float cos_angle = current_reach_direction_.dot(new_dir);
-  cos_angle = std::clamp(cos_angle, -1.0f, 1.0f);
-  float angle_deg =
-      std::acos(cos_angle) * 180.0f / static_cast<float>(M_PI);
-
-  return angle_deg <= config_.focus_angle_threshold_deg;
+void TrackingState::processFrame() {
+    // Step 1: Detect AprilTag
+    bool tag_detected = detectAprilTag();
+    
+    // Step 2: Estimate depth with MiDaS
+    estimateDepth();
+    
+    // Step 3: Segment objects with FastSAM
+    segmentObjects();
+    
+    // Step 4: Detect hand landmarks
+    detectHands();
+    
+    // Step 5: Update tracking state
+    updateTracking();
 }
 
-float TrackingState::GetFinalizationProgress() const {
-  if (current_state_ != State::OBJECT_FINALIZING) return 0.0f;
-
-  // Progress based on frames and time; use the more conservative.
-  float frame_progress =
-      static_cast<float>(finalization_frame_count_) /
-      static_cast<float>(std::max(1, config_.min_focus_frames));
-  return std::clamp(frame_progress, 0.0f, 1.0f);
+bool TrackingState::detectAprilTag() {
+    try {
+        std::vector<TagDetection> detections = apriltag_utils_->get_tags(current_frame_);
+        
+        if (!detections.empty()) {
+            // Use first detected tag
+            const TagDetection& detection = detections[0];
+            
+            state_command_.apriltag_detected = true;
+            state_command_.apriltag_id = detection.id;
+            
+            // Extract position from pose_t (3x1 translation vector)
+            state_command_.apriltag_position = Eigen::Vector3f(
+                detection.pose_t.at<double>(0, 0),
+                detection.pose_t.at<double>(1, 0),
+                detection.pose_t.at<double>(2, 0)
+            );
+            
+            // Extract rotation from pose_R (3x3 rotation matrix)
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    state_command_.apriltag_rotation(i, j) = 
+                        detection.pose_R.at<double>(i, j);
+                }
+            }
+            
+            // Use depth from TagDetection
+            state_command_.scaling_factor = 1.0 / detection.depth;
+            
+            frames_without_detection_ = 0;
+            return true;
+        } else {
+            state_command_.apriltag_detected = false;
+            frames_without_detection_++;
+            return false;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "AprilTag detection error: " << e.what() << "\n";
+        state_command_.apriltag_detected = false;
+        return false;
+    }
 }
 
-Eigen::Vector3f TrackingState::GetSmoothedHandPosition() const {
-  if (!kalman_filter_ || !kalman_filter_->IsInitialized())
-    return Eigen::Vector3f::Zero();
-  return kalman_filter_->GetPosition();
+void TrackingState::estimateDepth() {
+    try {
+        state_command_.depth_map = midas_utils_->getDepthMap(current_frame_);
+    } catch (const std::exception& e) {
+        std::cerr << "Depth estimation error: " << e.what() << "\n";
+        state_command_.depth_map = cv::Mat();
+    }
 }
 
-Eigen::Vector3f TrackingState::GetReachDirection() const {
-  return current_reach_direction_;
+void TrackingState::segmentObjects() {
+    try {
+        if (state_command_.fastsam_utils) {
+            fastsam_result_ = state_command_.fastsam_utils->segment(current_frame_);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "FastSAM segmentation error: " << e.what() << "\n";
+    }
 }
 
-const DetectedObject* TrackingState::GetTargetObject(
-    const std::vector<DetectedObject>& objects) const {
-  if (current_state_ != State::OBJECT_FINALIZED) return nullptr;
-  if (target_object_index_ < 0 ||
-      target_object_index_ >= static_cast<int>(objects.size())) {
-    return nullptr;
-  }
-  return &objects[target_object_index_];
+void TrackingState::detectHands() {
+    try {
+        if (mediapipe_utils_) {
+            hand_landmarks_ = mediapipe_utils_->Detect(current_frame_);
+            
+            // Get smoothed index fingertip
+            smoothed_index_tip_ = mediapipe_utils_->GetSmoothedIndexTip(current_frame_);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "MediaPipe hand detection error: " << e.what() << "\n";
+        hand_landmarks_.clear();
+        smoothed_index_tip_ = std::nullopt;
+    }
 }
 
-void TrackingState::Reset() {
-  current_state_ = State::WAITING;
-  target_object_index_ = -1;
-  finalization_frame_count_ = 0;
-  finalization_start_timestamp_ns_ = 0;
-  last_focus_angle_deg_ = 0.0f;
-  current_object_scores_.clear();
-  current_reach_direction_.setZero();
-  if (trajectory_analyzer_) trajectory_analyzer_->Reset();
+
+void TrackingState::updateTracking() {
+    if (state_command_.apriltag_detected) {
+        if (!tracking_active_) {
+            std::cout << "🎯 Tracking activated! Tag ID: " 
+                      << state_command_.apriltag_id << "\n";
+        }
+        tracking_active_ = true;
+    } else if (frames_without_detection_ > MAX_FRAMES_WITHOUT_DETECTION) {
+        if (tracking_active_) {
+            std::cout << "⚠️  Tracking lost after " 
+                      << frames_without_detection_ << " frames\n";
+        }
+        tracking_active_ = false;
+    }
 }
 
-}  // namespace torso_stabilization
+void TrackingState::drawHandSkeleton(const std::vector<utils::HandPoint>& landmarks) {
+    int frame_width = current_frame_.cols;
+    int frame_height = current_frame_.rows;
+    
+    // MediaPipe hand connections (21 landmarks, 0-20)
+    const std::vector<std::pair<int, int>> connections = {
+        // Thumb
+        {0, 1}, {1, 2}, {2, 3}, {3, 4},
+        // Index finger
+        {0, 5}, {5, 6}, {6, 7}, {7, 8},
+        // Middle finger
+        {0, 9}, {9, 10}, {10, 11}, {11, 12},
+        // Ring finger
+        {0, 13}, {13, 14}, {14, 15}, {15, 16},
+        // Pinky
+        {0, 17}, {17, 18}, {18, 19}, {19, 20},
+        // Palm
+        {5, 9}, {9, 13}, {13, 17}
+    };
+    
+    // Draw connections (skeleton)
+    for (const auto& connection : connections) {
+        int idx1 = connection.first;
+        int idx2 = connection.second;
+        
+        if (idx1 < landmarks.size() && idx2 < landmarks.size()) {
+            cv::Point pt1(landmarks[idx1].x * frame_width, 
+                         landmarks[idx1].y * frame_height);
+            cv::Point pt2(landmarks[idx2].x * frame_width, 
+                         landmarks[idx2].y * frame_height);
+            
+            cv::line(current_frame_, pt1, pt2, cv::Scalar(0, 255, 0), 2);
+        }
+    }
+    
+    // Draw landmarks (joints)
+    for (size_t i = 0; i < landmarks.size(); ++i) {
+        cv::Point pt(landmarks[i].x * frame_width, 
+                    landmarks[i].y * frame_height);
+        
+        // Different colors for different fingers
+        cv::Scalar color;
+        if (i == 0) {
+            color = cv::Scalar(255, 0, 0);  // Wrist - Blue
+        } else if (i >= 1 && i <= 4) {
+            color = cv::Scalar(255, 255, 0);  // Thumb - Cyan
+        } else if (i >= 5 && i <= 8) {
+            color = cv::Scalar(0, 255, 255);  // Index - Yellow
+        } else if (i >= 9 && i <= 12) {
+            color = cv::Scalar(255, 0, 255);  // Middle - Magenta
+        } else if (i >= 13 && i <= 16) {
+            color = cv::Scalar(128, 0, 255);  // Ring - Purple
+        } else {
+            color = cv::Scalar(0, 128, 255);  // Pinky - Orange
+        }
+        
+        cv::circle(current_frame_, pt, 5, color, -1);
+        cv::circle(current_frame_, pt, 6, cv::Scalar(255, 255, 255), 1);
+    }
+}
+
+
+void TrackingState::visualizeTracking() {
+    // Create overlay for segmentation masks
+    cv::Mat overlay = current_frame_.clone();
+    
+    // Draw FastSAM segmentation masks
+    if (!fastsam_result_.masks.empty()) {
+        // Generate random colors for each object (consistent across frames)
+        static std::vector<cv::Scalar> colors;
+        if (colors.size() < fastsam_result_.masks.size()) {
+            colors.clear();
+            for (size_t i = 0; i < fastsam_result_.masks.size(); ++i) {
+                cv::Scalar color(
+                    rand() % 200 + 55,  // 55-255
+                    rand() % 200 + 55,
+                    rand() % 200 + 55
+                );
+                colors.push_back(color);
+            }
+        }
+        
+        // Draw each segmentation mask
+        for (size_t i = 0; i < fastsam_result_.masks.size(); ++i) {
+            const auto& mask = fastsam_result_.masks[i];
+            const auto& box = fastsam_result_.boxes[i];
+            float score = fastsam_result_.scores[i];
+            
+            // Apply colored mask overlay
+            cv::Mat colored_mask = cv::Mat::zeros(mask.size(), CV_8UC3);
+            colored_mask.setTo(colors[i % colors.size()], mask);
+            
+            // Blend mask with original frame
+            cv::addWeighted(overlay, 1.0, colored_mask, 0.3, 0, overlay);
+            
+            // Draw bounding box
+            cv::rectangle(overlay, box, colors[i % colors.size()], 2);
+            
+            // Draw label with confidence
+            std::string label = cv::format("Obj %zu: %.2f", i, score);
+            int baseline = 0;
+            cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 
+                                                  0.5, 1, &baseline);
+            
+            // Background for text
+            cv::rectangle(overlay, 
+                         cv::Point(box.x, box.y - text_size.height - 5),
+                         cv::Point(box.x + text_size.width, box.y),
+                         colors[i % colors.size()], -1);
+            
+            // Text
+            cv::putText(overlay, label, cv::Point(box.x, box.y - 5),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+        }
+        
+        // Blend overlay with original frame
+        cv::addWeighted(current_frame_, 0.6, overlay, 0.4, 0, current_frame_);
+    }
+    
+    // Draw hand skeletons
+    for (const auto& [hand_id, landmarks] : hand_landmarks_) {
+        drawHandSkeleton(landmarks);
+    }
+    
+    // Draw smoothed index fingertip with larger highlight
+    if (smoothed_index_tip_.has_value()) {
+        cv::Point tip = smoothed_index_tip_.value();
+        
+        // Draw larger circle for smoothed tip
+        cv::circle(current_frame_, tip, 12, cv::Scalar(0, 0, 255), -1);  // Red filled circle
+        cv::circle(current_frame_, tip, 14, cv::Scalar(255, 255, 255), 2);  // White border
+        
+        // Draw crosshair
+        int cross_size = 20;
+        cv::line(current_frame_, 
+                 cv::Point(tip.x - cross_size, tip.y), 
+                 cv::Point(tip.x + cross_size, tip.y),
+                 cv::Scalar(0, 255, 0), 2);
+        cv::line(current_frame_, 
+                 cv::Point(tip.x, tip.y - cross_size), 
+                 cv::Point(tip.x, tip.y + cross_size),
+                 cv::Scalar(0, 255, 0), 2);
+        
+        // Label
+        cv::putText(current_frame_, "Index Tip", 
+                    cv::Point(tip.x + 20, tip.y - 20),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+    }
+    
+    // Draw tracking status header
+    std::string status = tracking_active_ ? "TRACKING ACTIVE" : "SEARCHING FOR TAG";
+    cv::Scalar status_color = tracking_active_ ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 165, 255);
+    
+    cv::putText(current_frame_, status, cv::Point(10, 30),
+                cv::FONT_HERSHEY_SIMPLEX, 1.0, status_color, 2);
+    
+    if (state_command_.apriltag_detected) {
+        // Draw AprilTag ID
+        std::string tag_info = "Tag ID: " + std::to_string(state_command_.apriltag_id);
+        cv::putText(current_frame_, tag_info, cv::Point(10, 70),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
+        
+        // Draw 3D position
+        std::string pos_info = cv::format("Position: [%.2f, %.2f, %.2f]m",
+                                          state_command_.apriltag_position.x(),
+                                          state_command_.apriltag_position.y(),
+                                          state_command_.apriltag_position.z());
+        cv::putText(current_frame_, pos_info, cv::Point(10, 100),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+        
+        // Draw rotation angles (convert rotation matrix to Euler angles)
+        Eigen::Vector3f euler = state_command_.apriltag_rotation.eulerAngles(0, 1, 2);
+        euler = euler * 180.0f / M_PI;  // Convert to degrees
+        
+        std::string rot_info = cv::format("Rotation: [%.1f°, %.1f°, %.1f°]",
+                                          euler.x(), euler.y(), euler.z());
+        cv::putText(current_frame_, rot_info, cv::Point(10, 130),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+    }
+    
+    // Draw object and hand count
+    int y_offset = 160;
+    if (!fastsam_result_.masks.empty()) {
+        std::string obj_count = cv::format("Objects: %zu", fastsam_result_.masks.size());
+        cv::putText(current_frame_, obj_count, cv::Point(10, y_offset),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 200, 0), 2);
+        y_offset += 30;
+    }
+    
+    if (!hand_landmarks_.empty()) {
+        std::string hand_count = cv::format("Hands: %zu", hand_landmarks_.size());
+        cv::putText(current_frame_, hand_count, cv::Point(10, y_offset),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+    }
+    
+    // Draw depth map overlay (small corner visualization)
+    if (!state_command_.depth_map.empty()) {
+        cv::Mat depth_vis;
+        cv::normalize(state_command_.depth_map, depth_vis, 0, 255, cv::NORM_MINMAX);
+        depth_vis.convertTo(depth_vis, CV_8U);
+        cv::applyColorMap(depth_vis, depth_vis, cv::COLORMAP_JET);
+        
+        int preview_size = 200;
+        int margin = 10;
+        
+        // Check if preview fits in the frame
+        if (current_frame_.cols > preview_size + margin && 
+            current_frame_.rows > preview_size + margin) {
+            
+            cv::Mat roi = current_frame_(cv::Rect(
+                current_frame_.cols - preview_size - margin,
+                current_frame_.rows - preview_size - margin,
+                preview_size,
+                preview_size
+            ));
+            
+            cv::Mat resized_depth;
+            cv::resize(depth_vis, resized_depth, roi.size());
+            resized_depth.copyTo(roi);
+            
+            // Label
+            cv::putText(current_frame_, "Depth Map", 
+                        cv::Point(current_frame_.cols - preview_size - margin, 
+                                 current_frame_.rows - preview_size - margin - 10),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+        }
+    }
+    
+    // Draw tracking status indicator
+    if (tracking_active_) {
+        cv::circle(current_frame_, cv::Point(current_frame_.cols - 30, 30), 
+                   15, cv::Scalar(0, 255, 0), -1);
+        cv::putText(current_frame_, "LOCK", 
+                    cv::Point(current_frame_.cols - 100, 35),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 2);
+    } else {
+        cv::circle(current_frame_, cv::Point(current_frame_.cols - 30, 30), 
+                   15, cv::Scalar(0, 165, 255), -1);
+        cv::putText(current_frame_, "SEARCH", 
+                    cv::Point(current_frame_.cols - 120, 35),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 165, 255), 2);
+    }
+    
+    // Instructions footer
+    cv::putText(current_frame_, "Press 'i' for IDLE | 'q' to QUIT",
+                cv::Point(10, current_frame_.rows - 20),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
+}

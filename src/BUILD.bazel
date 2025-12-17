@@ -1,51 +1,32 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
-
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["calib.json", "calib.yaml", "calib_2.yaml",])
-
-# ============================================================================
-# State Command Library
-# ============================================================================
-
-cc_library(
-    name = "state_command",
-    srcs = ["state_command.cpp"],
-    hdrs = ["//include:state_command"],
-    deps = [
-        "//include:state_command",
-        "@linux_opencv//:opencv",  # Changed
-        "@eigen//:eigen3",
+# Main executable
+cc_binary(
+    name = "main",
+    srcs = [
+        "main.cpp",
     ],
-    copts = ["-I."],
-    visibility = ["//visibility:public"],
-)
-
-# ============================================================================
-# Tracking State Library
-# ============================================================================
-
-cc_library(
-    name = "tracking_state",
-    srcs = ["tracking_state.cpp"],
-    hdrs = ["//include:tracking_state"],
+    deps = [
+        ":idle_state",
+        ":tracking_state",
+        "//include:state_command",
+    ],
     copts = [
         "-std=c++17",
+        "-O3",
         "-Wall",
         "-Wextra",
-        "-O3",
-        "-I.",
     ],
-    deps = [
-        "//include:tracking_state",
-        "@eigen//:eigen3",
+    linkopts = [
+        "-lpthread",
     ],
-    visibility = ["//visibility:public"],
+    data = [
+        "//src/models:dpt_swin2_tiny_256_torchscript",
+        ":calib_2.yaml",
+        "//src/models:FastSAM-x",
+        "//src/models:FastSAM-s",
+    ],
 )
-
-# ============================================================================
-# Idle State Library
-# ============================================================================
 
 cc_library(
     name = "idle_state",
@@ -53,42 +34,38 @@ cc_library(
     hdrs = ["//include:idle_state"],
     deps = [
         "//include:idle_state",
-        ":state_command",
-        ":tracking_state",
-        "//src/utils:imu_server",
-        "//src/utils:imu_tracker",
-        "//src/utils:fastsam_utils",
-        "@linux_opencv//:opencv",  # Changed
-        "@open3d//:open3d",
-        "@eigen//:eigen3",
-        "@com_github_nlohmann_json//:json",
+        "//include:state_command",
         "//src/utils:mp_utils",
         "//src/utils:midas_utils",
+        "//src/utils:imu_server",
+        "//src/utils:imu_tracker",
         "//src/utils:apriltag_utils",
-    ],
-    copts = ["-std=c++17", "-I."],
-    visibility = ["//visibility:public"],
-)
-
-# ============================================================================
-# Main Binary
-# ============================================================================
-
-cc_binary(
-    name = "main",
-    srcs = ["main.cpp"],
-    deps = [
-        ":idle_state",
-        ":state_command",
-        ":tracking_state",
+        "//src/utils:fastsam_utils",
         "@linux_opencv//:opencv",
         "@eigen//:eigen3",
     ],
-    copts = ["-std=c++17"],
-    data = [
-        "//src/models:dpt_swin2_tiny_256_torchscript",
-        ":calib_2.yaml",
-        "//src/models:FastSAM-x",
-        "//src/models:FastSAM-s",
+    copts = [
+        "-std=c++17",
+        "-O3",
+    ],
+)
+
+cc_library(
+    name = "tracking_state",
+    srcs = ["tracking_state.cpp"],
+    hdrs = ["//include:tracking_state"],
+    deps = [
+        "//include:tracking_state",
+        "//include:state_command",
+        "//src/utils:mp_utils",
+        "//src/utils:midas_utils",
+        "//src/utils:apriltag_utils",
+        "//src/utils:fastsam_utils",
+        "@linux_opencv//:opencv",
+        "@eigen//:eigen3",
+    ],
+    copts = [
+        "-std=c++17",
+        "-O3",
     ],
 )
