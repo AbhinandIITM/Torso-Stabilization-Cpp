@@ -3,22 +3,22 @@ package(default_visibility = ["//visibility:public"])
 # Main executable
 cc_binary(
     name = "main",
-    srcs = [
-        "main.cpp",
-    ],
+    srcs = ["main.cpp"],
     deps = [
         ":idle_state",
         ":tracking_state",
         "//include:state_command",
     ],
     copts = [
-        "-std=c++17",
+        "-std=c++17", # Explicitly set C++17
         "-O3",
         "-Wall",
-        "-Wextra",
     ],
     linkopts = [
         "-lpthread",
+        "-lc++",      # LLVM C++ library
+        "-lc++abi",   # Required for C++ exception handling/RTTI in libc++
+        "-Wl,-rpath,/usr/lib/x86_64-linux-gnu", # Ensures binary finds it at runtime
     ],
     data = [
         "//src/models:dpt_swin2_tiny_256_torchscript",
@@ -27,6 +27,7 @@ cc_binary(
         "//src/models:FastSAM-s",
     ],
 )
+
 
 cc_library(
     name = "idle_state",
