@@ -99,33 +99,53 @@ SystemState TrackingState::run()
 
     return SystemState::IDLE;
 }
+void TrackingState::processFrame() {
+    using namespace std::chrono;
+    
+    // Start total timer
+    auto frame_start = steady_clock::now();
 
-void TrackingState::processFrame()
-{
-    // Step 1: Detect AprilTag
-    bool tagdetected = detectAprilTag();
+    // 1. AprilTag Detection
+    auto t1 = steady_clock::now();
+    detectAprilTag();
+    auto d_tag = duration_cast<milliseconds>(steady_clock::now() - t1).count();
 
-    // Step 2: Estimate depth with MiDaS
-    estimateDepth();
+    // 2. Hand Tracking (MediaPipe)
+    auto t2 = steady_clock::now();
+    detectHands();
+    auto d_hand = duration_cast<milliseconds>(steady_clock::now() - t2).count();
 
-    // Step 3: Segment objects with FastSAM (now includes filtering)
-    segmentObjects();
+    // 3. Heavy Tasks: Segmentation & Depth (Conditional)
+    long long d_sam = 0, d_depth = 0;
+    if (frame_count % 10 == 0 || fastsam_result.boxes.empty()) {
+        auto tsam = steady_clock::now();
+        segmentObjects();
+        d_sam = duration_cast<milliseconds>(steady_clock::now() - tsam).count();
 
-    // DEBUG: Print actual counts
-    if (frame_count % 30 == 0 && !fastsam_result.masks.empty()) {
-        std::cout << "FastSAM: " << fastsam_result.masks.size() << " masks, "
-                  << fastsam_result.boxes.size() << " boxes, "
-                  << fastsam_result.scores.size() << " scores" << std::endl;
+        auto tdepth = steady_clock::now();
+        estimateDepth();
+        d_depth = duration_cast<milliseconds>(steady_clock::now() - tdepth).count();
     }
 
-    // Step 4: Detect hand landmarks
-    detectHands();
-
-    // Step 5: Calculate object reach scores
+    // 4. Scoring & State Update
+    auto t3 = steady_clock::now();
     calculateObjectScores();
-
-    // Step 6: Update tracking state
     updateTracking();
+    auto d_score = duration_cast<milliseconds>(steady_clock::now() - t3).count();
+
+    // 5. Profiling Report
+    if (frame_count % 30 == 0) {
+        auto total = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - frame_start).count();
+        float actual_ai_ms = mediapipe_utils->GetLatestInferenceMs();
+
+        std::cout << "\n--- Performance Profile (Frame " << frame_count << ") ---" << std::endl;
+        std::cout << "  AprilTag:  " << std::setw(3) << d_tag   << " ms" << std::endl;
+        std::cout << "  MediaPipe: " << std::fixed << std::setprecision(1) << actual_ai_ms << " ms (Actual AI Latency)" << std::endl;
+        std::cout << "  FastSAM:   " << std::setw(3) << d_sam   << " ms" << std::endl;
+        std::cout << "  MiDaS:     " << std::setw(3) << d_depth << " ms" << std::endl;
+        std::cout << "  TOTAL:     " << std::setw(3) << total   << " ms" << std::endl;
+        std::cout << "------------------------------------------\n" << std::endl;
+    }
 }
 
 bool TrackingState::detectAprilTag()
@@ -243,8 +263,14 @@ void TrackingState::detectHands()
 {
     try {
         if (mediapipe_utils) {
-            hand_landmarks = mediapipe_utils->Detect(current_frame);
-            smoothed_index_tip = mediapipe_utils->GetSmoothedIndexTip(current_frame);
+            // 1. Send the current frame to the background AI thread
+            mediapipe_utils->Update(current_frame);
+
+            // 2. Retrieve the most recent landmarks without blocking the loop
+            hand_landmarks = mediapipe_utils->GetLatestLandmarks();
+
+            // 3. Get the smoothed index tip using the new width/height signature
+            smoothed_index_tip = mediapipe_utils->GetSmoothedIndexTip(current_frame.cols, current_frame.rows);
         }
     } catch (const std::exception& e) {
         std::cerr << "MediaPipe hand detection error: " << e.what() << std::endl;
@@ -586,9 +612,9 @@ void TrackingState::visualizeTracking()
             const auto& box = fastsam_result.boxes[i];
 
             // Create colored mask
-            cv::Mat coloredmask = cv::Mat::zeros(mask.size(), CV_8UC3);
-            coloredmask.setTo(colors[i % colors.size()], mask);
-            cv::addWeighted(overlay, 1.0, coloredmask, 0.3, 0, overlay);
+            // cv::Mat coloredmask = cv::Mat::zeros(mask.size(), CV_8UC3);
+            // coloredmask.setTo(colors[i % colors.size()], mask);
+            // cv::addWeighted(overlay, 1.0, coloredmask, 0.3, 0, overlay);
 
             // Highlight target object (highest score)
             cv::Scalar boxcolor = colors[i % colors.size()];

@@ -227,44 +227,25 @@ void IdleState::releaseComponents() {
 }
 
 void IdleState::displayStatus(const cv::Mat& frame) {
-    cv::Mat display = frame.clone();
+    // Create a compact status overlay at the top
+    int barHeight = 40;
+    cv::Rect barRect(0, 0, frame.cols, barHeight);
     
-    int y_offset = 30;
-    int line_height = 35;
-    
-    cv::putText(display, "IDLE STATE - System Ready", 
-                cv::Point(10, y_offset), cv::FONT_HERSHEY_SIMPLEX, 
-                1.0, cv::Scalar(0, 255, 0), 2);
-    y_offset += line_height + 10;
-    
-    // Component status
-    auto drawStatus = [&](const std::string& name, bool status) {
-        cv::Scalar color = status ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
-        std::string symbol = status ? "[OK]" : "[FAIL]";
-        cv::putText(display, symbol + " " + name, 
-                    cv::Point(10, y_offset), cv::FONT_HERSHEY_SIMPLEX, 
-                    0.6, color, 2);
-        y_offset += line_height;
-    };
-    
-    drawStatus("MiDaS", state_command_.midas_initialized);
-    drawStatus("FastSAM", state_command_.fastsam_initialized);
-    drawStatus("MediaPipe", state_command_.mediapipe_initialized);
-    drawStatus("AprilTag", state_command_.apriltag_initialized);
-    drawStatus("IMU", state_command_.imu_initialized);
-    
-    // Instructions
-    y_offset += 20;
-    cv::putText(display, "Press 't' for TRACKING", 
-                cv::Point(10, y_offset), cv::FONT_HERSHEY_SIMPLEX, 
-                0.7, cv::Scalar(255, 255, 0), 2);
-    y_offset += line_height;
-    cv::putText(display, "Press 'q' to QUIT", 
-                cv::Point(10, y_offset), cv::FONT_HERSHEY_SIMPLEX, 
-                0.7, cv::Scalar(255, 255, 0), 2);
-    
-    display.copyTo(frame);
+    // Transparent black background for OSD
+    cv::Mat overlay = frame.clone();
+    cv::rectangle(overlay, barRect, cv::Scalar(0, 0, 0), -1);
+    cv::addWeighted(overlay, 0.6, frame, 0.4, 0, frame);
+
+    // Single-line status indicators
+    std::string statusMsg = "System: IDLE | [T] Track [Q] Quit | ";
+    statusMsg += (state_command_.midas_initialized ? "MiDaS " : "!MiDaS ");
+    statusMsg += (state_command_.apriltag_initialized ? "Tag " : "!Tag ");
+    statusMsg += (state_command_.imu_initialized ? "IMU" : "!IMU");
+
+    cv::putText(frame, statusMsg, cv::Point(15, 27), 
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
 }
+
 
 void IdleState::cleanup() {
     std::cout << "IdleState: Cleaning up...\n";

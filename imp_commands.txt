@@ -1,2 +1,3 @@
 bazel run //src/tests:midas_test
 bazel build //src/tests:midas_test
+bazel run -c opt --copt=-mavx2 //src/tests:mp_test
